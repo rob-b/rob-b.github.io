@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Robb.re | Testing with py.test and Sqlalchemy </title>
+
+    <link href="http://fonts.googleapis.com/css?family=Roboto:300,400,700,400italic" rel="stylesheet" type="text/css">
+    <link href="http://fonts.googleapis.com/css?family=Droid+Sans+Mono" rel="stylesheet" type="text/css">
+<link href="http://fonts.googleapis.com/css?family=PT+Serif:400,700" rel="stylesheet" type="text/css">
+
+    <link href="../css/fonts/fonts.css" rel="stylesheet">
+    <link href="../css/normalize.css" rel="stylesheet">
+    <link href="../css/concrete.css" rel="stylesheet">
+    <link href="../css/site.css" rel="stylesheet">
+    <link rel="stylesheet" href="//cdn.jsdelivr.net/highlight.js/8.6/styles/tomorrow-night.min.css">
+    <link rel="shortcut icon" href="../favicon.ico">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="row">
+      <div class="six columns offset by-three">
+        <h1><a href="../">robb.re</a></h1>
+        <nav>
+          <ul>
+            <!--li><a href="/freelance.html">Freelance</a></li-->
+            <li><a href="../projects.html">Projects</a></li>
+            <li><a href="../cv.html">CV</a></li>
+            <li><a href="../writing.html">Writing</a></li>
+          </ul>
+        </nav>
+      </div>
+    </div>
+  <div class="row">
+    <div class="six columns offset by-three">
+      <div class="info">
+    <h2>Testing with py.test and Sqlalchemy</h2>
+    <span>
+        Posted on September 10, 2013
+    </span>
+    
+</div>
+
+<p>Note: Probably the best article on testing with sqlalchemy is John Sontek’s
+<a href="http://sontek.net/blog/detail/writing-tests-for-pyramid-and-sqlalchemy%20%22Writing%20tests%20for%20pyramid%20and%20sqlalchemy%22">Writing tests for pyramid and
+sqlalchemy</a></p>
+<p>If you’re anything like me then you’ve probably done some research and found
+that most examples of how to test sqlalchemy use one of two techniques:</p>
+<ol type="1">
+<li>Use sqlite for tests (typically in-memory sqlite) regardless of whether or
+not the production system uses sqlite.</li>
+<li>Create and drop the db’s tables during the setup/teardown phase of the test
+run.</li>
+</ol>
+<h3 id="the-real-thing">The real thing</h3>
+<p>If your tests start exercising the db then you’ve left the realm of “unit
+tests” and are now writing functional or integration tests. Once you’re writing
+integration tests you probably should be testing that integration works against
+the real db.</p>
+<h3 id="transactions-to-the-rescue">Transactions to the rescue</h3>
+<p>So from here the obvious step would seem to be to eschew the use of sqlite and
+go simply drop and recreate the tables on each test run. One problem with this
+is that it’s slow. The slower a test suite is the less likely it is to be run
+and while it’s fair to say that the extra (milli)seconds added by creating and
+recreating the tables will likely not be the main bottleneck every little helps
+when keeping the tests fast. More importantly dropping and recreating the
+tables prevents a very easy speedup - running the tests in parallel. A similar
+drawback of the drop/create approach I encountered while working with a client
+is that if your CI server runs your tests against multiple branches (say
+develop and master) then you’ll possibly end up with intermittently failing
+tests because a test running against the develop branch dropped your tables at
+the same time as a test running against master tried to read from them.</p>
+<p>So what’s the solution? Run the tests inside of transactions and simply reset
+the db after each test. Here’s how to achieve this with py.test.</p>
+<h3 id="py.test-fixture">Py.test Fixture</h3>
+<p><code>py.test</code> has a feature called fixtures which provides “a fixed baseline upon
+which tests can reliably and repeatedly execute”. Conceptually this is similar
+to the classical xUnit setup and teardown methods but is a lot more flexible.
+Writing a py.test fixture is pretty simple (copying the example from the
+py.test docs).</p>
+<pre><code># test_some_stuff.py
+import pytest
+
+@pytest.fixture
+def smtp():
+    import smtplib
+    return smtplib.SMTP(&quot;merlinux.eu&quot;)
+
+def test_ehlo(smtp):
+    response, msg = smtp.ehlo()
+    assert response == 250</code></pre>
+<p>py.test uses dependency injection to allow passing arguments to a test
+function. The <code>test_ehlo</code> function takes an <code>smtp</code> argument and so the py.test
+runner knows to pass the corresponding <code>smtp</code> fixture to that function when
+executing it. As-is, this fixture will be executed once for each test function
+that uses it but it is also possible to define fixtures to be either module,
+class or session level in which case the fixture would be executed once (per
+scope level) and a memoised version of the result is passed on subsequent
+calls. We can use session-scoped fixtures to create our SqlAlchemy session for
+testing with.</p>
+<pre><code># conftest.py
+import pytest
+from sqlalchemy import create_engine
+from foo import models
+
+
+@pytest.fixture(scope='session')
+def connection(request):
+    engine = create_engine('postgresql://bar@/test_bar')
+    models.Base.metadata.create_all(engine)
+    connection = engine.connect()
+    models.DBSession.registry.clear()
+    models.DBSession.configure(bind=connection)
+    models.Base.metadata.bind = engine
+    request.addfinalizer(models.Base.metadata.drop_all)
+    return connection
+
+
+@pytest.fixture
+def db_session(request, connection):
+    from transaction import abort
+    trans = connection.begin()
+    request.addfinalizer(trans.rollback)
+    request.addfinalizer(abort)
+
+    from foo.models import DBSession
+    return DBSession</code></pre>
+<p>py.test fixtures can themselves have dependencies injected and we make use of
+this feature in two ways here.</p>
+<p>Firstly we define a <code>connection</code> fixture which accepts <code>request</code>. <code>request</code> is
+a py.test builtin fixture which allows some interaction with the context of the
+current test session. We create and configure an sqlalchemy engine +
+connection, create all tables and use <code>request.addfinalizer</code> to add a post test
+session callback that will drop the created tables. The <code>db_session</code> fixture
+that our tests will be using makes use of two fixtures - the builtin <code>request</code>
+and the <code>connection</code> fixture we just defined. <code>db_session</code> simply begins the
+implicit transaction associated with a db connection and adds another
+<code>request.addfinalizer</code> callback to rollback and abort the transaction.</p>
+<p>Note that <code>connection</code> is scoped to a session and so the connection is created
+once whereas <code>db_session</code> will be called for each test that uses it. To make
+use of this session we write a test as follows.</p>
+<pre><code>def test_db_lookup(db_session):
+
+    model_instance = models.Widget()
+    db_session.add(model_instance)
+    db_session.flush()
+
+    assert 1 == db_session.query(models.Widget).count()
+
+
+def test_db_is_rolled_back(db_session):
+    assert 0 == db_session.query(models.Widget).count()</code></pre>
+
+    </div>
+  </div>
+  <script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
+  <script src="../js/highlight.pack.js"></script>
+  <script>
+    jQuery(function() {
+        jQuery('pre code').each(function(i, block){
+            hljs.highlightBlock(block.parentElement);
+        })
+    });
+  </script>
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-66133224-1', 'auto');
+    ga('send', 'pageview');
+
+  </script>
+  </body>
+</html>
