@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Robb.re | Examining headers with http-conduit </title>
+
+    <link href="http://fonts.googleapis.com/css?family=Roboto:300,400,700,400italic" rel="stylesheet" type="text/css">
+    <link href="http://fonts.googleapis.com/css?family=Droid+Sans+Mono" rel="stylesheet" type="text/css">
+<link href="http://fonts.googleapis.com/css?family=PT+Serif:400,700" rel="stylesheet" type="text/css">
+
+    <link href="../css/fonts/fonts.css" rel="stylesheet">
+    <link href="../css/normalize.css" rel="stylesheet">
+    <link href="../css/concrete.css" rel="stylesheet">
+    <link href="../css/site.css" rel="stylesheet">
+    <link rel="stylesheet" href="//cdn.jsdelivr.net/highlight.js/8.6/styles/tomorrow-night.min.css">
+    <link rel="shortcut icon" href="../favicon.ico">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="row">
+      <div class="six columns offset by-three">
+        <h1><a href="../">robb.re</a></h1>
+        <nav>
+          <ul>
+            <!--li><a href="/freelance.html">Freelance</a></li-->
+            <li><a href="../projects.html">Projects</a></li>
+            <li><a href="../cv.html">CV</a></li>
+            <li><a href="../writing.html">Writing</a></li>
+          </ul>
+        </nav>
+      </div>
+    </div>
+  <div class="row">
+    <div class="six columns offset by-three">
+      <div class="info">
+    <h2>Examining headers with http-conduit</h2>
+    <span>
+        Posted on July 31, 2015
+    </span>
+    
+</div>
+
+<p>In this simple case I was testing a service that performs geoip redirection to
+confirm if IP addresses for a known region were being redirected to the
+expected location. They were not.</p>
+<p>I was using a fairly recent stackage nightly build (2015-07-05) but the newest
+version of http-conduit it had was <code>2.1.5</code> whereas the newest version (at the
+time of writing) is <code>2.1.7</code> which deprecates the <a href="https://hackage.haskell.org/package/http-conduit-2.1.7/docs/Network-HTTP-Conduit.html#v:withManager"><code>withManager</code></a> function I used.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# LANGUAGE OverloadedStrings #-}</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">module</span> <span class="dt">Lib</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    ( examine</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    ) <span class="kw">where</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Network</span> (withSocketsDo)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Network.HTTP.Conduit</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Network.HTTP.Types</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Monad</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.ByteString</span> <span class="kw">as</span> <span class="dt">B</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Addresses</span> (addresses)</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.HashMap.Strict</span> <span class="kw">as</span> <span class="dt">M</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>getHeaders fwd <span class="ot">=</span> [</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>            (<span class="st">&quot;X-Forwarded-proto&quot;</span>, <span class="st">&quot;https&quot;</span>),</span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>            (<span class="st">&quot;X-Forwarded-for&quot;</span>, fwd),</span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>            (<span class="st">&quot;Host&quot;</span>, <span class="st">&quot;www.myspace.com&quot;</span>) ]</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>addresses' <span class="ot">=</span> <span class="fu">take</span> <span class="dv">100</span> addresses</span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>expectedLocation <span class="ot">=</span> <span class="st">&quot;https://www.myspace.com&quot;</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a><span class="ot">getResponseHeaders ::</span> <span class="dt">B.ByteString</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">ResponseHeaders</span></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>getResponseHeaders fwd <span class="ot">=</span> withSocketsDo <span class="op">$</span> <span class="kw">do</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>    request' <span class="ot">&lt;-</span> parseUrl <span class="st">&quot;http://&lt;some_ip&gt;&quot;</span></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> request <span class="ot">=</span> request' { requestHeaders <span class="ot">=</span> getHeaders fwd</span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>                           , redirectCount <span class="ot">=</span> <span class="dv">0</span></span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>                           , checkStatus <span class="ot">=</span> \_ _ _ <span class="ot">-&gt;</span> <span class="dt">Nothing</span>}</span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>    withManager <span class="op">$</span> \manager <span class="ot">-&gt;</span> <span class="kw">do</span></span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>        response <span class="ot">&lt;-</span> http request manager</span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>        <span class="fu">return</span> <span class="op">$</span> responseHeaders response</span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a><span class="ot">examine ::</span> <span class="dt">IO</span> ()</span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a>examine <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb1-40"><a href="#cb1-40" aria-hidden="true" tabindex="-1"></a>    results <span class="ot">&lt;-</span> forM addresses' getMatchingness</span>
+<span id="cb1-41"><a href="#cb1-41" aria-hidden="true" tabindex="-1"></a>    forM_ (<span class="fu">filter</span> doesNotMatch results) <span class="op">$</span> \x <span class="ot">-&gt;</span> <span class="fu">print</span> x</span>
+<span id="cb1-42"><a href="#cb1-42" aria-hidden="true" tabindex="-1"></a>        <span class="kw">where</span></span>
+<span id="cb1-43"><a href="#cb1-43" aria-hidden="true" tabindex="-1"></a>            doesNotMatch (_, _, b) <span class="ot">=</span> <span class="fu">not</span> b</span>
+<span id="cb1-44"><a href="#cb1-44" aria-hidden="true" tabindex="-1"></a>            convHeaders <span class="ot">=</span> M.lookupDefault <span class="st">&quot;&quot;</span> <span class="st">&quot;Location&quot;</span></span>
+<span id="cb1-45"><a href="#cb1-45" aria-hidden="true" tabindex="-1"></a>            getMatchingness url <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb1-46"><a href="#cb1-46" aria-hidden="true" tabindex="-1"></a>                headers <span class="ot">&lt;-</span> getResponseHeaders url</span>
+<span id="cb1-47"><a href="#cb1-47" aria-hidden="true" tabindex="-1"></a>                <span class="kw">let</span> location <span class="ot">=</span> convHeaders <span class="op">$</span> M.fromList headers</span>
+<span id="cb1-48"><a href="#cb1-48" aria-hidden="true" tabindex="-1"></a>                B.putStrLn url</span>
+<span id="cb1-49"><a href="#cb1-49" aria-hidden="true" tabindex="-1"></a>                <span class="fu">return</span> (url, location, location <span class="op">==</span> expectedLocation)</span></code></pre></div>
+
+    </div>
+  </div>
+  <script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
+  <script src="../js/highlight.pack.js"></script>
+  <script>
+    jQuery(function() {
+        jQuery('pre code').each(function(i, block){
+            hljs.highlightBlock(block.parentElement);
+        })
+    });
+  </script>
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-66133224-1', 'auto');
+    ga('send', 'pageview');
+
+  </script>
+  </body>
+</html>

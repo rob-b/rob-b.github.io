@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Robb.re | Why Tests are Useful </title>
+
+    <link href="http://fonts.googleapis.com/css?family=Roboto:300,400,700,400italic" rel="stylesheet" type="text/css">
+    <link href="http://fonts.googleapis.com/css?family=Droid+Sans+Mono" rel="stylesheet" type="text/css">
+<link href="http://fonts.googleapis.com/css?family=PT+Serif:400,700" rel="stylesheet" type="text/css">
+
+    <link href="../css/fonts/fonts.css" rel="stylesheet">
+    <link href="../css/normalize.css" rel="stylesheet">
+    <link href="../css/concrete.css" rel="stylesheet">
+    <link href="../css/site.css" rel="stylesheet">
+    <link rel="stylesheet" href="//cdn.jsdelivr.net/highlight.js/8.6/styles/tomorrow-night.min.css">
+    <link rel="shortcut icon" href="../favicon.ico">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="row">
+      <div class="six columns offset by-three">
+        <h1><a href="../">robb.re</a></h1>
+        <nav>
+          <ul>
+            <!--li><a href="/freelance.html">Freelance</a></li-->
+            <li><a href="../projects.html">Projects</a></li>
+            <li><a href="../cv.html">CV</a></li>
+            <li><a href="../writing.html">Writing</a></li>
+          </ul>
+        </nav>
+      </div>
+    </div>
+  <div class="row">
+    <div class="six columns offset by-three">
+      <div class="info">
+    <h2>Why Tests are Useful</h2>
+    <span>
+        Posted on March 18, 2014
+    </span>
+    
+</div>
+
+<p>It seems to me that automated tests are viewed by many developers as sort of a badge of “real programmer”-ness and as such are something to be written as a sense of duty if time permits. I think that this misses the real value of writing tests - they push you, if you chose to listen, towards writing simpler, more reusable code. If we take as a given that reusable and modular code is a useful goal (in all honestly I so seldom see reusable and modular code that I doubt this is a foregone conclusion) then writing tests will guide you towards that goal if you listen to what your tests are telling you.</p>
+<p>For the examples here I’ll be using the kind of tests I normally see in django codebases as an example of poor tests. This is not a reflection on django itself; it’s just that as a predominantly python company that makes webapps we most often encounter django developers and so these are the anti-patterns we see most often.</p>
+<p>For this example lets assume that we’re working on an application that does nothing more than display a randomised list of books. We’d typically expect to see something like this:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_we_get_books(self):
+        book = Book.objects.create(title=u'Jack and Jill')
+        response = self.client.get('/books/')
+        returned_book = response.context['books'][0]
+        self.assertEqual(book.slug, returned_book.slug)</code></pre>
+<p>The problems with this test are manifold but the most glaring to me is that it’s not at all clear what is actually being tested. It’s <em>probably</em> a view that is the intended unit under test but it’s entirely possible that the actual value the assertion is made against is based on a <code>middleware</code>, <code>context_processor</code>, template tag, logic in the template itself, the behaviour of <code>Book.save</code> (or a <code>post_save</code> signal) or something else I’m overlooking. Lets assume that it is the view that we’re testing here; we still have the issue of not being able to instantly determine exactly which view we’re testing. Sure, you just need to look up the view name in the urls module but as quick as looking up the view might be it would still surely be better if the test actually indicated what it was testing wouldn’t it?</p>
+<p>There’s also the issue of time taken to execute the test. At the start of the project this test will be kind of fast to run but will only get slower as code is added to the application. The importance of speed for your tests is that it shortens the feedback loop between writing code and seeing the results of the test. Ever <code>&lt;alt&gt;-&lt;tab&gt;</code> to something else as some slow tests are running only to get distracted and not return to what you’re supposed to be doing for too long? I know that I have. Worse yet are those test suites that take so long to run that they are never run. As is, this test requires executing</p>
+<ol type="1">
+<li>all of the django url resolution code</li>
+<li>each <code>middleware</code> that is currently enabled</li>
+<li>the db instantiation and write</li>
+<li>each <code>context_processor</code> currently enabled.</li>
+</ol>
+<p>Now imagine if this view was to become login protected the test code would have to be updated:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_we_get_books(self):
+        admin = User.objects.create_superuser('admin', 'admin@example.com', 'password')
+        self.client.login('admin', 'password')
+        book = Book.objects.create(title=u'Jack and Jill')
+        response = self.cient.get('/books/')
+        returned_book = response.context['books'][0]
+        self.assertEqual(book.slug, returned_book.slug)</code></pre>
+<p>Even though this test is purely to confirm that the view code is returning a list of books we now have to create a superuser and login. This kind of test churn is one of the things that turns people off of writing tests. Why should seemingly unrelated changes cause all of the tests to have to update?</p>
+<p>An additional drawback with this form of test I first heard mentioned by <a href="http://www.infoq.com/presentations/integration-tests-scam">JB Rainsberger</a> is that each conditional statement introduces two possible code paths. In other words, for <code>n</code> conditionals there are <code>n^2</code> paths. This means that for a function with 10 conditionals you’d need to write 100 tests to fully cover the possible execution paths. As it currently stands how many conditional statements do you think are encountered while passing through almost the entire django framework as this test currently does? I would guess a lot. Can you say with certainty that the application won’t add even more paths as it accrues features? It’s highly unlikely that it won’t. Wouldn’t be better to write tests that don’t need to execute all of those unrelated code paths and allow us to focus purely on covering the actual functionality that we’re interested in?</p>
+<p>The first step to both clarifying and simplifying the test would be to make use of django’s <code>RequestFactory</code> which allows you to create an instance of a <code>Request</code> object you can pass to a view and therefore directly test just the view function that you’re interested in. <code>RequestFactory</code> shares the same API as the test client which means that you can <code>POST</code> and <code>GET</code> as you would with the test client:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_we_get_books(self):
+        book = Book.objects.create(title=u'Jack and Jill')
+        factory = RequestFactory()
+        request = factory.get('/url-is-unimportant')
+        response = book_list_view(request)
+        returned_book = response.context['books'][0]
+        self.assertEqual(book.slug, returned_book.slug)</code></pre>
+<p>Let’s also start to imagine the view that we’re actually testing:</p>
+<pre><code>def book_list_view(request):
+    books = Book.objects.order_by('?')
+    context = {'books': books}
+    return TemplateResponse(request, 'book_list.html', context)</code></pre>
+<p>This is a much better test in that it doesn’t execute so much django code. The url resolution and <code>middleware</code> processing is all skipped here. <code>TemplateResponse</code> does use a request context and so the <code>context_processor</code> code is still executed however. If the view is updated to require login then the test code would need to be updated unfortunately:</p>
+<pre><code>@login_required
+def book_list_view(request):
+    books = Book.objects.order_by('?')
+    context = {'books': books}
+    return TemplateResponse(request, 'book_list.html', context)
+
+
+class TestBookView(TestCase):
+    def test_we_get_books(self):
+        book = Book.objects.create(title=u'Jack and Jill')
+        factory = RequestFactory()
+        request = factory.get('/url-is-unimportant')
+        request.session = BaseSession()
+        request.user = User()
+        response = book_list_view(request)
+        returned_book = response.context['books'][0]
+        self.assertEqual(book.slug, returned_book.slug)</code></pre>
+<p>On the plus side, we have access to the request instance and so we can directly add session and user attributes (which is what the middleware would do) in order to satisfy the <code>login_required</code> decorator. Setting the request attributes in this way is quicker than creating a superuser in the db and calling the login view.</p>
+<p>Now imagine a new requirement is added to allow a book to be “promoted” and always remain in the 1st five books returned based on a preferred subject of interest as defined in the current user’s profile. The first implementation’s view might look like this:</p>
+<pre><code>@login_required
+def book_list_view(request):
+
+    # use a onetone relation to profile instead of user.get_profile()
+    subject = request.user.profile.preferred_subject
+    books = list(Book.objects.order_by('?'))
+    first_5 = books[:5]
+    if subject not in [book.subject for book in first_5]:
+      try:
+        promoted = [book for book in books[5:] if book.subject == subject][0]
+      except IndexError:
+        promoted = None
+      else:
+        promoted = books.pop(books.index(promoted))
+
+      if promoted:
+        insert_point = first_5.index(random.choice(first_5))
+        books.insert(insert_point, promoted)
+    context = {'books': books}
+    return TemplateResponse(request, 'book_list.html', context)</code></pre>
+<p>Now the test needs to be updated to handle the profile which could look like this:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_prefered_subject_in_first_5_books(self):
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Little red riding hood', subject='wolves'))
+        factory = RequestFactory()
+        request = factory.get('/url-is-unimportant')
+        request.session = BaseSession()
+        user = User.objects.create('alice', 'a@e.com', 'password')
+        request.user = user
+        UserProfile.objects.create(user=user, preferred_subject='wolves')
+
+        response = book_list_view(request)
+        first_5 = response.context['books'][:5]
+        self.assertTrue('wolves' in [b.subject for b in first_5])</code></pre>
+<p>As you can see the amount of setup code needed to enable this test is growing. A common practice to avoid repeatedly having to perform the setup code is to either move this setup to the <code>setUp</code> method. If you’re really unlucky you might encounter a <code>TestCase</code> where the author has subclassed <code>TestCase</code> and created a specialised class that you can inherit from whenever code that exercises this view is needed. Another poor practice is to use a factory library of some sort to make it easier to create the 6 records needed to test with.</p>
+<p>The pain that setting up the state to test this view causes is the most crucial benefit that writing tests can offer you and unfortunately so many developers misinterpret this pain and remove it in completely the wrong way. Whenever you encounter a situation like this where so much state is needed your test is telling you that the code you are testing is doing too much. When you step back to think about it, all we are trying to test is that there is always a <code>Book</code> instance with a certain subject in the first 5 items of the list. The critical piece of code has nothing to do with a logged in user and as we can see from the view code, although the preferred subject is derived from the user’s profile the actual profile the user profile itself has no bearing on the subsequent ordering of the books. Clearly none of the user, profile or session are actually needed to test the ordering of the books and so how can we make this view easier to test?:</p>
+<pre><code>def get_books(subject):
+  books = list(Book.objects.order_by('?'))
+  first_5 = books[:5]
+  if subject not in [book.subject for book in first_5]:
+    try:
+      promoted = [book for book in books[5:] if book.subject == subject][0]
+    except IndexError:
+      promoted = None
+    else:
+      promoted = books.pop(books.index(promoted))
+
+    if promoted:
+      insert_point = first_5.index(random.choice(first_5))
+      books.insert(insert_point, promoted)
+  return books
+
+
+@login_required
+def book_list_view(request):
+
+    # use a 121 relation to profile instead of user.get_profile()
+    subject = request.user.profile.preferred_subject
+
+    context = {'books': get_books(subject)}
+    return TemplateResponse(request, 'book_list.html', context)</code></pre>
+<p>By extracting the logic that ensures the preferred subject is among the first 5 books we uncoupled it from the issue of logging a user in and getting their preferred subject from their profile. The code is now much simpler to test because we no longer need to create the request, the user, the profile or the session just to ensure that the preferred subject is in the 1st five items:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_prefered_subject_in_first_5_books(self):
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Jack and Jill', subject='water'))
+        Book.objects.create(title=u'Little red riding hood', subject='wolves'))
+        books = get_books(subject='wolves')
+        first_5 = books[:5]
+        self.assertTrue('wolves' in [b.subject for b in first_5])</code></pre>
+<p>We still have to create the six database records though so perhaps that factory might come in handy after all. Let’s pause for a second though and think if that’s really the case. We can see that <code>get_books</code> doesn’t actually make use of any of features of the queryset. In fact <code>get_books</code> only ever checks to see the value of <code>book.subject</code>. This means that we could actually rewrite <code>get_books</code> and the view to look like this:</p>
+<pre><code>def get_books(books, subject):
+  first_5 = books[:5]
+  if subject not in [book.subject for book in first_5]:
+    try:
+      promoted = [book for book in books[5:] if book.subject == subject][0]
+    except IndexError:
+      promoted = None
+    else:
+      promoted = books.pop(books.index(promoted))
+
+    if promoted:
+      insert_point = first_5.index(random.choice(first_5))
+      books.insert(insert_point, promoted)
+  return books
+
+
+@login_required
+def book_list_view(request):
+
+    # use a 121 relation to profile instead of user.get_profile()
+    subject = request.user.profile.preferred_subject
+
+    context = {'books': get_books(list(Book.objects.order_by('?')), subject)}
+    return TemplateResponse(request, 'book_list.html', context)</code></pre>
+<p>(<code>get_books</code> no longer gets books and so should really be renamed but for now I’m leaving it as it is)</p>
+<p>Writing to the database is one of the slowest operations that you can perform and so if it’s possible to avoid doing so then you really should. For the test we only need to instantiate the models instances; not save them:</p>
+<pre><code>class TestBookView(TestCase):
+    def test_prefered_subject_in_first_5_books(self):
+        books = [
+          Book(title=u'Jack and Jill', subject='water'))
+          Book(title=u'Jack and Jill', subject='water'))
+          Book(title=u'Jack and Jill', subject='water'))
+          Book(title=u'Jack and Jill', subject='water'))
+          Book(title=u'Jack and Jill', subject='water'))
+          Book(title=u'Little red riding hood', subject='wolves'))
+        ]
+        books = get_books(books, subject='wolves')
+        first_5 = books[:5]
+        self.assertTrue('wolves' in [b.subject for b in first_5])</code></pre>
+<p>Now at this point some may complain that we’ve modified the code purely to make it easier to test. Undeniably that is true. I would point out that it is equally true that we’ve modified the code to make it easier to reuse. By definition executing code during a test is reusing it and if, as stated earlier, we consider reusable code a desirable goal then by making the code testable we’re moving the code closer to our desired state. If it’s now possible to reuse this code during tests it must also be possible to reuse it elsewhere.</p>
+<p>An interesting side-effect of these changes are that we’ve now stumbled into what is known as the <a href="http://en.wikipedia.org/wiki/Single_responsibility_principle">Single Responsibility Principle (SRP)</a>. Briefly, the concept behind SRP is that each class, method or function should do one thing only. When we first extracted <code>get_books</code> it was doing two things: getting a set of records from the database and modifying the order of those records in memory based on some requirement. As we modified <code>get_books</code> to make it more reusable we fell in line with SRP. Now of course SRP along with any other programming guidelines is not an inviolable rule but it is something that often leads to reusable code.</p>
+<p>A second useful programming concept we stumbled into is <a href="http://en.wikipedia.org/wiki/Dependency_injection">Dependency Injection (DI)</a> which basically is a technique wherein hard-coded dependencies are removed from the code body and are instead passed in to the function or method as arguments. In our <code>get_books</code> function we removed the reference to <code>Book.objects.random</code> and instead just passed in an iterable because all the ordering of books really needs is an iterable of book-like items. For our purposes it was useful to not have to store the records in the database and just pass in the iterable but what has happened now is that <code>get_books</code> has opened up for re-use in ways we may not have imagined. If perhaps the query needed to get the initial list of books needs to change that will not affect <code>get_books</code>. In fact because <code>get_books</code> has no knowledge of <em>what</em> it’s sorting it can now be used so sort any iterable of objects with a subject attribute in the same way. This makes use of duck-typing and polymorphism.</p>
+<p>As an example, imagine that we start incorporating an additional source of books as provided by a 3rd party that returns JSON. We could easily pass this new source to <code>get_books</code> if we thinly wrap the JSON to provide the correct attribute.</p>
+<p>Now that <code>get_books</code> neither gets books nor even does anything in particularly book-related lets rename it to <code>reorder_items</code> (not an amazing name but naming is one of the two hard problems of computer science after all):</p>
+<pre><code>class Booklike(object):
+
+    def __init__(self, obj):
+        self.original_json_object = obj
+
+    @property
+    def subject(self):
+        return self.original_json_object['topic']
+
+
+@login_required
+def book_list_view(request):
+
+    subject = request.user.profile.preferred_subject
+    books = [Booklike(obj) for obj in get_books_as_json()]
+    context = {'books': reorder_items(books)}
+    return TemplateResponse(request, 'book_list.html', context)</code></pre>
+<p>Now at this point I suspect that some may argue that You Ain’t Gonna Need It makes tight coupling a valid approach and perhaps they are right. I would counter that YAGNI applies more to functionality than design. The changes our tests led us towards don’t increase the functionality that the application provides; they merely led us towards providing that same functionality in a better designed way. That’s why tests are useful.</p>
+
+    </div>
+  </div>
+  <script src="https://code.jquery.com/jquery-1.11.3.min.js"></script>
+  <script src="../js/highlight.pack.js"></script>
+  <script>
+    jQuery(function() {
+        jQuery('pre code').each(function(i, block){
+            hljs.highlightBlock(block.parentElement);
+        })
+    });
+  </script>
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-66133224-1', 'auto');
+    ga('send', 'pageview');
+
+  </script>
+  </body>
+</html>
